@@ -32,14 +32,13 @@ const access = promisify(fs.access);
 
 // Gemini API Configuration
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
 if (!GEMINI_API_KEY) {
   console.error('Error: GEMINI_API_KEY environment variable is not set');
   process.exit(1);
 }
 
 // Gemini API endpoint
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 // -------------------------------
 // CLI Argument Parsing
@@ -155,7 +154,6 @@ Return the complete corrected test file:`;
     }
 
     const content = response.data.candidates[0].content.parts[0].text;
-
     if (!content || typeof content !== 'string') {
       throw new Error('Gemini API returned empty content');
     }
@@ -213,6 +211,7 @@ async function generateFix({ testPath, logPath, backup, dryRun }) {
 
   await writeFile(testPath, fixedContent, 'utf8');
   console.log(`Overwrote ${testPath} with corrected content.`);
+
   return { wrote: true };
 }
 
@@ -227,7 +226,6 @@ async function generateFix({ testPath, logPath, backup, dryRun }) {
       printHelp();
       process.exit(args.help ? 0 : 1);
     }
-
     await generateFix(args);
   } catch (err) {
     console.error('Error:', err.message || err);
