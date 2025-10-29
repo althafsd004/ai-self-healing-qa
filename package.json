@@ -1,0 +1,46 @@
+{
+  "name": "ai-self-healing-qa",
+  "version": "1.0.0",
+  "description": "AI-powered self-healing QA testing framework with automated test generation and debugging",
+  "main": "generate_test.js",
+  "bin": {
+    "generate-test": "./generate_test.js",
+    "debug-test": "./debug_test.js"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:ui": "playwright test --ui",
+    "test:report": "playwright show-report",
+    "install:browsers": "playwright install",
+    "generate": "node generate_test.js",
+    "debug": "node debug_test.js",
+    "setup": "npm run install:browsers"
+  },
+  "keywords": [
+    "ai",
+    "testing",
+    "qa",
+    "automation",
+    "playwright",
+    "self-healing",
+    "test-generation"
+  ],
+  "author": "althafsd004",
+  "license": "MIT",
+  "dependencies": {
+    "@playwright/test": "^1.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/althafsd004/ai-self-healing-qa.git"
+  },
+  "private": true
+}
