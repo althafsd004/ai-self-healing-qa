@@ -1,0 +1,16 @@
+name: CI Placeholder
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Placeholder step
+        run: echo "Workflow placeholder for ai-self-healing-qa"
