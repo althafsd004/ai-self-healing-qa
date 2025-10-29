@@ -1,0 +1,3 @@
+username=testuser@example.com
+password=Test@123
+loginUrl=https://example.com/login
