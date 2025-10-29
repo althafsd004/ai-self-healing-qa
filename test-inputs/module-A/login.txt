@@ -1,3 +1,5 @@
-username=testuser@example.com
-password=Test@123
-loginUrl=https://example.com/login
+Go to the QA login page.
+Type 'user@example.com' into the email field.
+Type 'password123' into the password field.
+Click the 'Sign In' button.
+Verify a welcome message is visible.
