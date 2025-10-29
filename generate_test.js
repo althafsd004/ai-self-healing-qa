@@ -23,7 +23,6 @@
  *   - Add error handling for API rate limits
  *   - Implement caching to avoid regenerating unchanged tests
  */
-
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -37,7 +36,6 @@ const axios = require('axios');
  * Set the GEMINI_API_KEY environment variable with your API key
  */
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
 if (!GEMINI_API_KEY) {
   console.error('Error: GEMINI_API_KEY environment variable is not set');
   process.exit(1);
@@ -51,7 +49,7 @@ const INPUT_FILE = 'test-inputs/module-A/login.txt';
 const OUTPUT_FILE = 'playwright-tests/module-A/login.spec.js';
 
 // Gemini API endpoint
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 // ============================================================================
 // MAIN FUNCTION
@@ -138,7 +136,6 @@ async function generatePlaywrightCode(testDescription) {
   try {
     // Construct prompt for Gemini API
     const prompt = `You are an expert test automation engineer specializing in Playwright.
-
 Given the following test description, generate a complete, production-ready Playwright test file.
 
 Test Description:
