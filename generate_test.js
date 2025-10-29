@@ -2,7 +2,7 @@
  * Test Generation Script for AI Self-Healing QA Framework
  * 
  * This script automates the generation of Playwright test files from plain text test descriptions.
- * It reads test input files, sends them to OpenAI API for conversion to Playwright code,
+ * It reads test input files, sends them to Gemini API for conversion to Playwright code,
  * and saves the generated test files in the appropriate directory structure.
  * 
  * Directory Structure:
@@ -14,8 +14,8 @@
  * 
  * Prerequisites:
  *   - Node.js installed
- *   - Required packages: fs, path, openai
- *   - OpenAI API key set in environment variable or replace placeholder
+ *   - Required packages: fs, path, axios
+ *   - Gemini API key set in environment variable GEMINI_API_KEY
  * 
  * Future Enhancements:
  *   - Add command-line arguments for custom input/output paths
@@ -26,18 +26,22 @@
 
 const fs = require('fs');
 const path = require('path');
-const OpenAI = require('openai');
+const axios = require('axios');
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 
 /**
- * OpenAI API Configuration
- * Replace 'YOUR_OPENAI_API_KEY_HERE' with your actual API key
- * or set the OPENAI_API_KEY environment variable
+ * Gemini API Configuration
+ * Set the GEMINI_API_KEY environment variable with your API key
  */
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'YOUR_OPENAI_API_KEY_HERE';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+if (!GEMINI_API_KEY) {
+  console.error('Error: GEMINI_API_KEY environment variable is not set');
+  process.exit(1);
+}
 
 /**
  * Input and output file paths
@@ -46,6 +50,9 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'YOUR_OPENAI_API_KEY_HERE';
 const INPUT_FILE = 'test-inputs/module-A/login.txt';
 const OUTPUT_FILE = 'playwright-tests/module-A/login.spec.js';
 
+// Gemini API endpoint
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`;
+
 // ============================================================================
 // MAIN FUNCTION
 // ============================================================================
@@ -53,28 +60,26 @@ const OUTPUT_FILE = 'playwright-tests/module-A/login.spec.js';
 /**
  * Main function to orchestrate the test generation process
  * 1. Read the test description from input file
- * 2. Call OpenAI API to convert description to Playwright code
+ * 2. Call Gemini API to convert description to Playwright code
  * 3. Save the generated code to output file
  */
 async function generateTest() {
   try {
     console.log('Starting test generation process...');
     
-    // Step 1: Read the test description from the input file
-    console.log(`Reading test description from: ${INPUT_FILE}`);
-    const testDescription = readTestInput(INPUT_FILE);
-    console.log('Test description loaded successfully.');
+    // Step 1: Read the test description from input file
+    const testDescription = await readTestInput(INPUT_FILE);
+    console.log(`Read test description from: ${INPUT_FILE}`);
     
-    // Step 2: Generate Playwright code using OpenAI API
-    console.log('Calling OpenAI API to generate Playwright code...');
-    const playwrightCode = await generatePlaywrightCode(testDescription);
-    console.log('Playwright code generated successfully.');
+    // Step 2: Generate Playwright code using Gemini API
+    const generatedCode = await generatePlaywrightCode(testDescription);
+    console.log('Successfully generated Playwright test code');
     
-    // Step 3: Save the generated code to the output file
-    console.log(`Saving generated code to: ${OUTPUT_FILE}`);
-    saveTestOutput(OUTPUT_FILE, playwrightCode);
+    // Step 3: Save the generated code to output file
+    await saveTestOutput(OUTPUT_FILE, generatedCode);
+    console.log(`Test file saved to: ${OUTPUT_FILE}`);
+    
     console.log('Test generation completed successfully!');
-    
   } catch (error) {
     console.error('Error during test generation:', error.message);
     process.exit(1);
@@ -82,142 +87,119 @@ async function generateTest() {
 }
 
 // ============================================================================
-// FILE OPERATIONS
+// HELPER FUNCTIONS
 // ============================================================================
 
 /**
- * Read test description from input file
- * @param {string} filePath - Path to the input text file
- * @returns {string} - Content of the test description file
+ * Read the test description from input file
+ * @param {string} filePath - Path to the input file
+ * @returns {Promise<string>} - Test description content
  */
-function readTestInput(filePath) {
+async function readTestInput(filePath) {
   try {
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`Input file not found: ${filePath}`);
-    }
-    
-    // Read file content with UTF-8 encoding
-    const content = fs.readFileSync(filePath, 'utf-8');
-    
-    // Validate that content is not empty
+    const content = fs.readFileSync(filePath, 'utf8');
     if (!content.trim()) {
       throw new Error('Input file is empty');
     }
-    
     return content;
   } catch (error) {
-    throw new Error(`Failed to read input file: ${error.message}`);
+    if (error.code === 'ENOENT') {
+      throw new Error(`Input file not found: ${filePath}`);
+    }
+    throw error;
   }
 }
 
 /**
- * Save generated Playwright code to output file
- * Creates necessary directories if they don't exist
- * @param {string} filePath - Path to the output file
- * @param {string} content - Generated Playwright code to save
+ * Save the generated test code to output file
+ * @param {string} filePath - Path to save the output file
+ * @param {string} content - Generated test code
  */
-function saveTestOutput(filePath, content) {
+async function saveTestOutput(filePath, content) {
   try {
-    // Extract directory path from file path
-    const directory = path.dirname(filePath);
-    
-    // Create directory structure if it doesn't exist
-    // recursive: true allows creating nested directories
-    if (!fs.existsSync(directory)) {
-      fs.mkdirSync(directory, { recursive: true });
-      console.log(`Created directory: ${directory}`);
+    // Ensure output directory exists
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
     }
     
-    // Write the generated code to the file
-    fs.writeFileSync(filePath, content, 'utf-8');
-    console.log(`Successfully saved test file: ${filePath}`);
-    
+    fs.writeFileSync(filePath, content, 'utf8');
   } catch (error) {
     throw new Error(`Failed to save output file: ${error.message}`);
   }
 }
 
-// ============================================================================
-// OPENAI API INTEGRATION
-// ============================================================================
-
 /**
- * Generate Playwright test code using OpenAI API
- * Sends the test description to OpenAI and receives Playwright code
- * @param {string} testDescription - Plain text description of the test
+ * Generate Playwright test code using Gemini API
+ * @param {string} testDescription - Plain text test description
  * @returns {Promise<string>} - Generated Playwright test code
  */
 async function generatePlaywrightCode(testDescription) {
   try {
-    // Validate API key is configured
-    if (OPENAI_API_KEY === 'YOUR_OPENAI_API_KEY_HERE') {
-      throw new Error('OpenAI API key not configured. Please set OPENAI_API_KEY environment variable or update the script.');
-    }
-    
-    // Initialize OpenAI client
-    const openai = new OpenAI({
-      apiKey: OPENAI_API_KEY,
-    });
-    
-    // Construct the prompt for OpenAI
-    // This prompt guides the AI to generate proper Playwright test code
-    const prompt = `You are an expert in test automation using Playwright.
+    // Construct prompt for Gemini API
+    const prompt = `You are an expert test automation engineer specializing in Playwright.
 
-Given the following test description, generate a complete Playwright test file in JavaScript.
-
-Requirements:
-- Use Playwright's test syntax (test.describe, test, expect)
-- Include all necessary imports
-- Add appropriate assertions
-- Include comments explaining each step
-- Follow Playwright best practices
-- Make the test maintainable and readable
+Given the following test description, generate a complete, production-ready Playwright test file.
 
 Test Description:
 ${testDescription}
 
+Requirements:
+1. Use modern Playwright syntax with async/await
+2. Include proper imports and test structure
+3. Add meaningful assertions
+4. Include comments for clarity
+5. Handle potential errors gracefully
+6. Use Page Object Model patterns where appropriate
+
 Generate the complete Playwright test code:`;
     
-    // Call OpenAI API with the prompt
-    // Using gpt-4 for higher quality code generation
-    // Adjust model and parameters as needed for your use case
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4', // Can be changed to 'gpt-3.5-turbo' for faster/cheaper generation
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert test automation engineer specializing in Playwright. Generate clean, maintainable test code.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      temperature: 0.3, // Lower temperature for more consistent code generation
-      max_tokens: 2000, // Adjust based on expected test complexity
+    // Call Gemini API with the prompt
+    const response = await axios.post(GEMINI_API_URL, {
+      contents: [{
+        parts: [{
+          text: prompt
+        }]
+      }],
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 2000,
+      }
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
     });
     
     // Extract the generated code from the API response
-    const generatedCode = response.choices[0].message.content.trim();
+    if (!response.data || !response.data.candidates || !response.data.candidates[0]) {
+      throw new Error('Gemini API returned invalid response');
+    }
+    
+    const generatedCode = response.data.candidates[0].content.parts[0].text.trim();
     
     // Validate that we received code
     if (!generatedCode) {
-      throw new Error('OpenAI API returned empty response');
+      throw new Error('Gemini API returned empty response');
     }
     
     return generatedCode;
     
   } catch (error) {
     // Provide detailed error messages for common API issues
-    if (error.status === 401) {
-      throw new Error('OpenAI API authentication failed. Check your API key.');
-    } else if (error.status === 429) {
-      throw new Error('OpenAI API rate limit exceeded. Please try again later.');
-    } else if (error.status === 500) {
-      throw new Error('OpenAI API server error. Please try again later.');
+    if (error.response) {
+      const status = error.response.status;
+      if (status === 401 || status === 403) {
+        throw new Error('Gemini API authentication failed. Check your API key.');
+      } else if (status === 429) {
+        throw new Error('Gemini API rate limit exceeded. Please try again later.');
+      } else if (status === 500) {
+        throw new Error('Gemini API server error. Please try again later.');
+      } else {
+        throw new Error(`Gemini API error: ${error.response.data?.error?.message || error.message}`);
+      }
     } else {
-      throw new Error(`OpenAI API error: ${error.message}`);
+      throw new Error(`Gemini API error: ${error.message}`);
     }
   }
 }
