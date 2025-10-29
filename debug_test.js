@@ -1,19 +1,18 @@
 #!/usr/bin/env node
-
 /**
  * debug_test.js
  *
  * Purpose:
  *  - Read a failed Playwright/Jest test file and its error log
- *  - Send both as context to OpenAI to request a corrected test script
+ *  - Send both as context to Gemini API to request a corrected test script
  *  - Overwrite the original test file with the LLM-corrected code
  *
  * Usage:
- *  node debug_test.js --test ./playwright-tests/example.spec.ts --log ./test-inputs/last_failure.log [--model gpt-4o-mini] [--backup]
+ *  node debug_test.js --test ./playwright-tests/example.spec.ts --log ./test-inputs/last_failure.log [--backup]
  *
  * Notes:
  *  - This script is modular with clear functions and robust error handling
- *  - Requires an OpenAI API key in environment variable OPENAI_API_KEY (placeholder below)
+ *  - Requires Gemini API key in environment variable GEMINI_API_KEY
  *  - Safe by default: creates a timestamped backup unless --no-backup is provided
  */
 
@@ -23,30 +22,35 @@
 
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 const { promisify } = require('util');
+
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 const copyFile = promisify(fs.copyFile);
 const access = promisify(fs.access);
 
-// Placeholder: You can also hardcode temporarily for local testing, but prefer env var.
-// Example: process.env.OPENAI_API_KEY = "YOUR_OPENAI_API_KEY_HERE";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "YOUR_OPENAI_API_KEY_HERE"; // <-- replace in CI/Secrets
+// Gemini API Configuration
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// Default model (can be overridden via --model flag)
-const DEFAULT_MODEL = 'gpt-4o-mini';
+if (!GEMINI_API_KEY) {
+  console.error('Error: GEMINI_API_KEY environment variable is not set');
+  process.exit(1);
+}
+
+// Gemini API endpoint
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`;
 
 // -------------------------------
 // CLI Argument Parsing
 // -------------------------------
 
 function parseArgs(argv) {
-  const args = { model: DEFAULT_MODEL, backup: true };
+  const args = { backup: true };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--test') args.testPath = argv[++i];
     else if (a === '--log') args.logPath = argv[++i];
-    else if (a === '--model') args.model = argv[++i];
     else if (a === '--backup') args.backup = true;
     else if (a === '--no-backup') args.backup = false;
     else if (a === '--dry-run') args.dryRun = true;
@@ -59,103 +63,128 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`\nUsage: node debug_test.js --test <path> --log <path> [--model <model>] [--backup|--no-backup] [--dry-run]\n\nOptions:\n  --test         Path to the failed test file to fix (required)\n  --log          Path to the error log describing the failure (required)\n  --model        OpenAI model to use (default: ${DEFAULT_MODEL})\n  --backup       Make a timestamped backup before overwrite (default)\n  --no-backup    Do not create a backup\n  --dry-run      Show the suggested fix without writing changes\n  -h, --help     Show this help\n\nEnvironment:\n  OPENAI_API_KEY  Your OpenAI API key (or replace placeholder in file)\n`);
+  console.log(`
+Usage: node debug_test.js --test <path> --log <path> [--backup|--no-backup] [--dry-run]
+
+Options:
+  --test         Path to the failed test file to fix (required)
+  --log          Path to the error log describing the failure (required)
+  --backup       Make a timestamped backup before overwrite (default)
+  --no-backup    Do not create a backup
+  --dry-run      Show the suggested fix without writing changes
+  -h, --help     Show this help
+
+Environment:
+  GEMINI_API_KEY  Your Gemini API key
+`);
 }
 
 // -------------------------------
-// File Utilities
+// Helper Functions
 // -------------------------------
 
 async function ensureReadable(filePath) {
-  if (!filePath) throw new Error('Missing file path');
   try {
     await access(filePath, fs.constants.R_OK);
-  } catch (e) {
-    throw new Error(`File not readable or does not exist: ${filePath}`);
+  } catch (err) {
+    throw new Error(`Cannot read file: ${filePath}`);
   }
 }
 
-function timestamp() {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return [
-    d.getFullYear(),
-    pad(d.getMonth() + 1),
-    pad(d.getDate()),
-    pad(d.getHours()),
-    pad(d.getMinutes()),
-    pad(d.getSeconds()),
-  ].join('');
+async function backupFile(filePath) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath, path.extname(filePath));
+  const ext = path.extname(filePath);
+  const backupPath = path.join(dir, `${base}.backup-${timestamp}${ext}`);
+  await copyFile(filePath, backupPath);
+  return backupPath;
 }
 
-async function backupFile(srcPath) {
-  const dir = path.dirname(srcPath);
-  const base = path.basename(srcPath);
-  const dest = path.join(dir, `${base}.bak.${timestamp()}`);
-  await copyFile(srcPath, dest);
-  return dest;
-}
+/**
+ * Call Gemini API to generate a fixed test file
+ * @param {Object} params - Parameters
+ * @param {string} params.testContent - Original test file content
+ * @param {string} params.logContent - Error log content
+ * @param {string} params.fileName - Name of the test file
+ * @returns {Promise<string>} - Fixed test code
+ */
+async function callGemini({ testContent, logContent, fileName }) {
+  const prompt = `You are an expert test automation engineer. Below is a Playwright/Jest test file that has failed, along with the error log.
 
-// -------------------------------
-// OpenAI Client (fetch-based to avoid extra deps)
-// -------------------------------
+Test File Name: ${fileName}
 
-async function callOpenAI({ apiKey, model, testContent, logContent, fileName }) {
-  if (!apiKey || apiKey === 'YOUR_OPENAI_API_KEY_HERE') {
-    throw new Error('OPENAI_API_KEY is missing. Set env var or edit placeholder.');
+Test File Content:
+\`\`\`
+${testContent}
+\`\`\`
+
+Error Log:
+\`\`\`
+${logContent}
+\`\`\`
+
+Please analyze the failure and provide a corrected version of the test file. Return ONLY the corrected code without any explanation or markdown formatting. Make sure to:
+1. Fix any syntax errors
+2. Correct logical issues causing the test to fail
+3. Update selectors if they appear to be incorrect
+4. Improve error handling if needed
+5. Maintain the original test structure and intent
+
+Return the complete corrected test file:`;
+
+  try {
+    const response = await axios.post(GEMINI_API_URL, {
+      contents: [{
+        parts: [{
+          text: prompt
+        }]
+      }],
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 4000,
+      }
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.data || !response.data.candidates || !response.data.candidates[0]) {
+      throw new Error('Gemini API returned invalid response');
+    }
+
+    const content = response.data.candidates[0].content.parts[0].text;
+
+    if (!content || typeof content !== 'string') {
+      throw new Error('Gemini API returned empty content');
+    }
+
+    return content.trim();
+
+  } catch (error) {
+    if (error.response) {
+      const status = error.response.status;
+      if (status === 401 || status === 403) {
+        throw new Error('Gemini API authentication failed. Check your API key.');
+      } else if (status === 429) {
+        throw new Error('Gemini API rate limit exceeded. Please try again later.');
+      } else if (status === 500) {
+        throw new Error('Gemini API server error. Please try again later.');
+      } else {
+        throw new Error(`Gemini API error: ${error.response.data?.error?.message || error.message}`);
+      }
+    } else {
+      throw new Error(`Gemini API error: ${error.message}`);
+    }
   }
-
-  const systemPrompt = `You are a senior QA engineer. Given a failing test file and its error log, produce a corrected, runnable version of the test that fixes the root cause. Keep original project conventions (Playwright/Jest where applicable), preserve intents, and include comments on the fix. Output ONLY the full corrected file content with no surrounding fences.`;
-
-  const userPrompt = [
-    `Project file: ${fileName}`,
-    '--- FAILED TEST CONTENT START ---',
-    testContent,
-    '--- FAILED TEST CONTENT END ---',
-    '',
-    '--- ERROR LOG START ---',
-    logContent,
-    '--- ERROR LOG END ---',
-    '',
-    'Please return only the corrected file content. Do not include markdown code fences.'
-  ].join('\n');
-
-  const body = {
-    model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ],
-    temperature: 0.2,
-  };
-
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`OpenAI API error ${res.status}: ${txt}`);
-  }
-
-  const json = await res.json();
-  const content = json?.choices?.[0]?.message?.content;
-  if (!content || typeof content !== 'string') {
-    throw new Error('OpenAI API returned empty content');
-  }
-  return content.trim();
 }
 
 // -------------------------------
 // Core Workflow
 // -------------------------------
 
-async function generateFix({ testPath, logPath, model, backup, dryRun }) {
+async function generateFix({ testPath, logPath, backup, dryRun }) {
   await ensureReadable(testPath);
   await ensureReadable(logPath);
 
@@ -164,9 +193,7 @@ async function generateFix({ testPath, logPath, model, backup, dryRun }) {
     readFile(logPath, 'utf8'),
   ]);
 
-  const fixedContent = await callOpenAI({
-    apiKey: OPENAI_API_KEY,
-    model,
+  const fixedContent = await callGemini({
     testContent,
     logContent,
     fileName: path.basename(testPath),
