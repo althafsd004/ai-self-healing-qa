@@ -2,7 +2,7 @@
  * Test Generation Script for AI Self-Healing QA Framework
  * 
  * This script automates the generation of Playwright test files from plain text test descriptions.
- * It reads test input files, sends them to Gemini API for conversion to Playwright code,
+ * It reads test input files, sends them to Perplexity API for conversion to Playwright code,
  * and saves the generated test files in the appropriate directory structure.
  * 
  * Directory Structure:
@@ -15,7 +15,7 @@
  * Prerequisites:
  *   - Node.js installed
  *   - Required packages: fs, path, axios
- *   - Gemini API key set in environment variable GEMINI_API_KEY
+ *   - Perplexity API key set in environment variable PERPLEXITY_API_KEY
  * 
  * Future Enhancements:
  *   - Add command-line arguments for custom input/output paths
@@ -23,6 +23,7 @@
  *   - Add error handling for API rate limits
  *   - Implement caching to avoid regenerating unchanged tests
  */
+
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -32,12 +33,13 @@ const axios = require('axios');
 // ============================================================================
 
 /**
- * Gemini API Configuration
- * Set the GEMINI_API_KEY environment variable with your API key
+ * Perplexity API Configuration
+ * Set the PERPLEXITY_API_KEY environment variable with your API key
  */
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-if (!GEMINI_API_KEY) {
-  console.error('Error: GEMINI_API_KEY environment variable is not set');
+const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || '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';
+
+if (!PERPLEXITY_API_KEY) {
+  console.error('Error: PERPLEXITY_API_KEY environment variable is not set');
   process.exit(1);
 }
 
@@ -48,8 +50,8 @@ if (!GEMINI_API_KEY) {
 const INPUT_FILE = 'test-inputs/module-A/login.txt';
 const OUTPUT_FILE = 'playwright-tests/module-A/login.spec.js';
 
-// Gemini API endpoint
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+// Perplexity API endpoint
+const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
 
 // ============================================================================
 // MAIN FUNCTION
@@ -58,28 +60,27 @@ const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/
 /**
  * Main function to orchestrate the test generation process
  * 1. Read the test description from input file
- * 2. Call Gemini API to convert description to Playwright code
+ * 2. Call Perplexity API to convert description to Playwright code
  * 3. Save the generated code to output file
  */
 async function generateTest() {
   try {
-    console.log('Starting test generation process...');
+    console.log('Starting test generation...');
     
     // Step 1: Read the test description from input file
-    const testDescription = await readTestInput(INPUT_FILE);
+    const testDescription = readTestInput(INPUT_FILE);
     console.log(`Read test description from: ${INPUT_FILE}`);
     
-    // Step 2: Generate Playwright code using Gemini API
-    const generatedCode = await generatePlaywrightCode(testDescription);
-    console.log('Successfully generated Playwright test code');
+    // Step 2: Generate Playwright code using Perplexity API
+    console.log('Calling Perplexity API...');
+    const playwrightCode = await generatePlaywrightCode(testDescription);
     
-    // Step 3: Save the generated code to output file
-    await saveTestOutput(OUTPUT_FILE, generatedCode);
-    console.log(`Test file saved to: ${OUTPUT_FILE}`);
+    // Step 3: Save the generated code to the output file
+    saveTestOutput(OUTPUT_FILE, playwrightCode);
+    console.log(`Test file generated successfully: ${OUTPUT_FILE}`);
     
-    console.log('Test generation completed successfully!');
   } catch (error) {
-    console.error('Error during test generation:', error.message);
+    console.error('Error generating test:', error.message);
     process.exit(1);
   }
 }
@@ -89,95 +90,89 @@ async function generateTest() {
 // ============================================================================
 
 /**
- * Read the test description from input file
+ * Read test description from the input file
  * @param {string} filePath - Path to the input file
- * @returns {Promise<string>} - Test description content
+ * @returns {string} - Content of the input file
  */
-async function readTestInput(filePath) {
+function readTestInput(filePath) {
   try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    if (!content.trim()) {
-      throw new Error('Input file is empty');
-    }
-    return content;
+    return fs.readFileSync(filePath, 'utf8');
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      throw new Error(`Input file not found: ${filePath}`);
-    }
-    throw error;
+    throw new Error(`Failed to read input file: ${error.message}`);
   }
 }
 
 /**
- * Save the generated test code to output file
- * @param {string} filePath - Path to save the output file
- * @param {string} content - Generated test code
+ * Save the generated Playwright code to the output file
+ * @param {string} filePath - Path to the output file
+ * @param {string} code - Generated Playwright code
  */
-async function saveTestOutput(filePath, content) {
+function saveTestOutput(filePath, code) {
   try {
-    // Ensure output directory exists
+    // Create directory if it doesn't exist
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
     
-    fs.writeFileSync(filePath, content, 'utf8');
+    // Clean up the code by removing markdown code blocks if present
+    let cleanCode = code;
+    if (code.includes('```javascript') || code.includes('```js')) {
+      cleanCode = code.replace(/```(?:javascript|js)\n?/g, '').replace(/```\n?/g, '');
+    }
+    
+    fs.writeFileSync(filePath, cleanCode.trim());
   } catch (error) {
-    throw new Error(`Failed to save output file: ${error.message}`);
+    throw new Error(`Failed to write output file: ${error.message}`);
   }
 }
 
 /**
- * Generate Playwright test code using Gemini API
- * @param {string} testDescription - Plain text test description
- * @returns {Promise<string>} - Generated Playwright test code
+ * Generate Playwright code using Perplexity API
+ * @param {string} testDescription - Plain text description of the test
+ * @returns {Promise<string>} - Generated Playwright code
  */
 async function generatePlaywrightCode(testDescription) {
   try {
-    // Construct prompt for Gemini API
-    const prompt = `You are an expert test automation engineer specializing in Playwright.
-Given the following test description, generate a complete, production-ready Playwright test file.
-
-Test Description:
-${testDescription}
-
-Requirements:
-1. Use modern Playwright syntax with async/await
-2. Include proper imports and test structure
-3. Add meaningful assertions
-4. Include comments for clarity
-5. Handle potential errors gracefully
-6. Use Page Object Model patterns where appropriate
-
-Generate the complete Playwright test code:`;
+    // Construct the prompt for Perplexity API
+    const prompt = `You are a Playwright test code generator. Generate a complete, working Playwright test file based on this description:\n\n${testDescription}\n\nRequirements:\n- Use modern Playwright syntax\n- Include proper imports and test structure\n- Add meaningful test descriptions\n- Use best practices for selectors\n- Include appropriate waits and assertions\n- Return ONLY the JavaScript code, no explanations\n\nGenerate the complete test file:`;
     
-    // Call Gemini API with the prompt
-    const response = await axios.post(GEMINI_API_URL, {
-      contents: [{
-        parts: [{
-          text: prompt
-        }]
-      }],
-      generationConfig: {
+    // Make API request to Perplexity
+    const response = await axios.post(
+      PERPLEXITY_API_URL,
+      {
+        model: 'llama-3.1-sonar-small-128k-online',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a Playwright test code generator. Generate clean, working code without any markdown formatting or explanations.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
         temperature: 0.3,
-        maxOutputTokens: 2000,
+        max_tokens: 2000
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
       }
-    }, {
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
+    );
     
     // Extract the generated code from the API response
-    if (!response.data || !response.data.candidates || !response.data.candidates[0]) {
-      throw new Error('Gemini API returned invalid response');
+    if (!response.data || !response.data.choices || !response.data.choices[0]) {
+      throw new Error('Perplexity API returned invalid response');
     }
     
-    const generatedCode = response.data.candidates[0].content.parts[0].text.trim();
+    const generatedCode = response.data.choices[0].message.content.trim();
     
     // Validate that we received code
     if (!generatedCode) {
-      throw new Error('Gemini API returned empty response');
+      throw new Error('Perplexity API returned empty response');
     }
     
     return generatedCode;
@@ -187,16 +182,16 @@ Generate the complete Playwright test code:`;
     if (error.response) {
       const status = error.response.status;
       if (status === 401 || status === 403) {
-        throw new Error('Gemini API authentication failed. Check your API key.');
+        throw new Error('Perplexity API authentication failed. Check your API key.');
       } else if (status === 429) {
-        throw new Error('Gemini API rate limit exceeded. Please try again later.');
+        throw new Error('Perplexity API rate limit exceeded. Please try again later.');
       } else if (status === 500) {
-        throw new Error('Gemini API server error. Please try again later.');
+        throw new Error('Perplexity API server error. Please try again later.');
       } else {
-        throw new Error(`Gemini API error: ${error.response.data?.error?.message || error.message}`);
+        throw new Error(`Perplexity API error: ${error.response.data?.error?.message || error.message}`);
       }
     } else {
-      throw new Error(`Gemini API error: ${error.message}`);
+      throw new Error(`Perplexity API error: ${error.message}`);
     }
   }
 }
