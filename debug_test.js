@@ -4,7 +4,7 @@
  *
  * Purpose:
  *  - Read a failed Playwright/Jest test file and its error log
- *  - Send both as context to Gemini API to request a corrected test script
+ *  - Send both as context to Perplexity API to request a corrected test script
  *  - Overwrite the original test file with the LLM-corrected code
  *
  * Usage:
@@ -12,7 +12,7 @@
  *
  * Notes:
  *  - This script is modular with clear functions and robust error handling
- *  - Requires Gemini API key in environment variable GEMINI_API_KEY
+ *  - Requires Perplexity API key in environment variable PERPLEXITY_API_KEY
  *  - Safe by default: creates a timestamped backup unless --no-backup is provided
  */
 
@@ -30,15 +30,16 @@ const writeFile = promisify(fs.writeFile);
 const copyFile = promisify(fs.copyFile);
 const access = promisify(fs.access);
 
-// Gemini API Configuration
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-if (!GEMINI_API_KEY) {
-  console.error('Error: GEMINI_API_KEY environment variable is not set');
+// Perplexity API Configuration
+const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || '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';
+
+if (!PERPLEXITY_API_KEY) {
+  console.error('Error: PERPLEXITY_API_KEY environment variable is not set');
   process.exit(1);
 }
 
-// Gemini API endpoint
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+// Perplexity API endpoint
+const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
 
 // -------------------------------
 // CLI Argument Parsing
@@ -63,117 +64,119 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`
-Usage: node debug_test.js --test <path> --log <path> [--backup|--no-backup] [--dry-run]
+Usage: node debug_test.js --test <test_file> --log <error_log> [options]
 
 Options:
-  --test         Path to the failed test file to fix (required)
-  --log          Path to the error log describing the failure (required)
-  --backup       Make a timestamped backup before overwrite (default)
-  --no-backup    Do not create a backup
-  --dry-run      Show the suggested fix without writing changes
-  -h, --help     Show this help
+  --test <file>     Path to the failing test file
+  --log <file>      Path to the error log file
+  --backup          Create a backup before overwriting (default)
+  --no-backup       Skip creating a backup
+  --dry-run         Print the corrected code without writing to file
+  -h, --help        Show this help message
 
-Environment:
-  GEMINI_API_KEY  Your Gemini API key
+Example:
+  node debug_test.js --test ./playwright-tests/login.spec.js --log ./test-inputs/error.log
 `);
 }
 
 // -------------------------------
-// Helper Functions
+// File Operations
 // -------------------------------
 
 async function ensureReadable(filePath) {
   try {
     await access(filePath, fs.constants.R_OK);
-  } catch (err) {
-    throw new Error(`Cannot read file: ${filePath}`);
+  } catch (error) {
+    throw new Error(`File not readable: ${filePath}`);
   }
 }
 
 async function backupFile(filePath) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath, path.extname(filePath));
-  const ext = path.extname(filePath);
-  const backupPath = path.join(dir, `${base}.backup-${timestamp}${ext}`);
+  const backupPath = `${filePath}.backup.${timestamp}`;
   await copyFile(filePath, backupPath);
   return backupPath;
 }
 
-/**
- * Call Gemini API to generate a fixed test file
- * @param {Object} params - Parameters
- * @param {string} params.testContent - Original test file content
- * @param {string} params.logContent - Error log content
- * @param {string} params.fileName - Name of the test file
- * @returns {Promise<string>} - Fixed test code
- */
-async function callGemini({ testContent, logContent, fileName }) {
-  const prompt = `You are an expert test automation engineer. Below is a Playwright/Jest test file that has failed, along with the error log.
+// -------------------------------
+// Perplexity API Integration
+// -------------------------------
 
-Test File Name: ${fileName}
+async function callPerplexity({ testContent, logContent, fileName }) {
+  const prompt = `You are a test debugging expert. I have a failing Playwright test and its error log. Please analyze the error and provide a corrected version of the test file.
 
-Test File Content:
-\`\`\`
+**Test File (${fileName}):**
+\`\`\`javascript
 ${testContent}
 \`\`\`
 
-Error Log:
+**Error Log:**
 \`\`\`
 ${logContent}
 \`\`\`
 
-Please analyze the failure and provide a corrected version of the test file. Return ONLY the corrected code without any explanation or markdown formatting. Make sure to:
-1. Fix any syntax errors
-2. Correct logical issues causing the test to fail
-3. Update selectors if they appear to be incorrect
-4. Improve error handling if needed
-5. Maintain the original test structure and intent
+**Requirements:**
+- Fix the specific issues mentioned in the error log
+- Keep the test structure and intent intact
+- Use proper Playwright syntax and best practices
+- Add proper waits and assertions as needed
+- Return ONLY the corrected JavaScript code, no explanations
 
-Return the complete corrected test file:`;
+Corrected test file:`;
 
   try {
-    const response = await axios.post(GEMINI_API_URL, {
-      contents: [{
-        parts: [{
-          text: prompt
-        }]
-      }],
-      generationConfig: {
+    const response = await axios.post(
+      PERPLEXITY_API_URL,
+      {
+        model: 'llama-3.1-sonar-small-128k-online',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a Playwright test debugging expert. Analyze failing tests and provide corrected code without any markdown formatting or explanations.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
         temperature: 0.3,
-        maxOutputTokens: 4000,
+        max_tokens: 2000
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
       }
-    }, {
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
+    );
 
-    if (!response.data || !response.data.candidates || !response.data.candidates[0]) {
-      throw new Error('Gemini API returned invalid response');
+    if (!response.data || !response.data.choices || !response.data.choices[0]) {
+      throw new Error('Perplexity API returned invalid response');
     }
 
-    const content = response.data.candidates[0].content.parts[0].text;
-    if (!content || typeof content !== 'string') {
-      throw new Error('Gemini API returned empty content');
+    let correctedCode = response.data.choices[0].message.content.trim();
+    
+    // Clean up the response by removing markdown code blocks if present
+    if (correctedCode.includes('```javascript') || correctedCode.includes('```js')) {
+      correctedCode = correctedCode.replace(/```(?:javascript|js)\n?/g, '').replace(/```\n?/g, '');
     }
-
-    return content.trim();
-
+    
+    return correctedCode.trim();
+    
   } catch (error) {
     if (error.response) {
       const status = error.response.status;
       if (status === 401 || status === 403) {
-        throw new Error('Gemini API authentication failed. Check your API key.');
+        throw new Error('Perplexity API authentication failed. Check your API key.');
       } else if (status === 429) {
-        throw new Error('Gemini API rate limit exceeded. Please try again later.');
+        throw new Error('Perplexity API rate limit exceeded. Please try again later.');
       } else if (status === 500) {
-        throw new Error('Gemini API server error. Please try again later.');
+        throw new Error('Perplexity API server error. Please try again later.');
       } else {
-        throw new Error(`Gemini API error: ${error.response.data?.error?.message || error.message}`);
+        throw new Error(`Perplexity API error: ${error.response.data?.error?.message || error.message}`);
       }
     } else {
-      throw new Error(`Gemini API error: ${error.message}`);
+      throw new Error(`Perplexity API error: ${error.message}`);
     }
   }
 }
@@ -191,7 +194,7 @@ async function generateFix({ testPath, logPath, backup, dryRun }) {
     readFile(logPath, 'utf8'),
   ]);
 
-  const fixedContent = await callGemini({
+  const fixedContent = await callPerplexity({
     testContent,
     logContent,
     fileName: path.basename(testPath),
@@ -211,7 +214,6 @@ async function generateFix({ testPath, logPath, backup, dryRun }) {
 
   await writeFile(testPath, fixedContent, 'utf8');
   console.log(`Overwrote ${testPath} with corrected content.`);
-
   return { wrote: true };
 }
 
@@ -222,10 +224,12 @@ async function generateFix({ testPath, logPath, backup, dryRun }) {
 (async function main() {
   try {
     const args = parseArgs(process.argv);
+    
     if (args.help || !args.testPath || !args.logPath) {
       printHelp();
       process.exit(args.help ? 0 : 1);
     }
+
     await generateFix(args);
   } catch (err) {
     console.error('Error:', err.message || err);
