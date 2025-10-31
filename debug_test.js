@@ -19,18 +19,21 @@
 // -------------------------------
 // Configuration and Imports
 // -------------------------------
-
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const { promisify } = require('util');
-
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 const copyFile = promisify(fs.copyFile);
 const access = promisify(fs.access);
 
-// Perplexity API Configuration
+/**
+ * Perplexity API Configuration
+ * API Endpoint: https://api.perplexity.ai/chat/completions
+ * Recommended Model: mistral-7b-instruct
+ * Set the PERPLEXITY_API_KEY environment variable with your API key
+ */
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || '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';
 
 if (!PERPLEXITY_API_KEY) {
@@ -44,7 +47,6 @@ const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
 // -------------------------------
 // CLI Argument Parsing
 // -------------------------------
-
 function parseArgs(argv) {
   const args = { backup: true };
   for (let i = 2; i < argv.length; i++) {
@@ -64,15 +66,15 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`
-Usage: node debug_test.js --test <test_file> --log <error_log> [options]
+Usage: node debug_test.js --test <test-file> --log <error-log> [OPTIONS]
 
 Options:
-  --test <file>     Path to the failing test file
-  --log <file>      Path to the error log file
-  --backup          Create a backup before overwriting (default)
-  --no-backup       Skip creating a backup
-  --dry-run         Print the corrected code without writing to file
-  -h, --help        Show this help message
+  --test <path>       Path to the failing test file (required)
+  --log <path>        Path to the error log file (required)
+  --backup            Create a timestamped backup of the test file (default: true)
+  --no-backup         Do not create a backup before overwriting
+  --dry-run           Print the corrected code without writing to file
+  -h, --help          Display this help message
 
 Example:
   node debug_test.js --test ./playwright-tests/login.spec.js --log ./test-inputs/error.log
@@ -80,67 +82,131 @@ Example:
 }
 
 // -------------------------------
-// File Operations
+// Main Function
 // -------------------------------
+async function main() {
+  const args = parseArgs(process.argv);
 
-async function ensureReadable(filePath) {
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  if (!args.testPath || !args.logPath) {
+    console.error('Error: Both --test and --log are required.');
+    printHelp();
+    process.exit(1);
+  }
+
+  console.log('\n===================================');
+  console.log('AI Self-Healing QA Framework - Test Debugger');
+  console.log('===================================\n');
+
   try {
-    await access(filePath, fs.constants.R_OK);
+    // Read test file and error log
+    console.log(`Reading test file: ${args.testPath}`);
+    const testContent = await safeReadFile(args.testPath);
+    console.log(`Reading error log: ${args.logPath}`);
+    const errorLog = await safeReadFile(args.logPath);
+
+    // Call Perplexity API to fix the test
+    console.log('\nSending to Perplexity API for correction...');
+    const correctedTest = await callPerplexityAPI(testContent, errorLog);
+
+    if (args.dryRun) {
+      console.log('\n--- Corrected Test (Dry Run) ---');
+      console.log(correctedTest);
+      console.log('--- End of Corrected Test ---\n');
+    } else {
+      // Backup original test file if needed
+      if (args.backup) {
+        const backupPath = createBackupPath(args.testPath);
+        console.log(`Creating backup: ${backupPath}`);
+        await copyFile(args.testPath, backupPath);
+      }
+
+      // Write corrected test back to the original file
+      console.log(`Writing corrected test to: ${args.testPath}`);
+      await writeFile(args.testPath, correctedTest, 'utf8');
+
+      console.log('\n✓ Test file successfully updated!');
+    }
   } catch (error) {
-    throw new Error(`File not readable: ${filePath}`);
+    console.error('\n✗ Error during debug process:');
+    console.error(error.message);
+    process.exit(1);
   }
 }
 
-async function backupFile(filePath) {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupPath = `${filePath}.backup.${timestamp}`;
-  await copyFile(filePath, backupPath);
-  return backupPath;
+// -------------------------------
+// Helper Functions
+// -------------------------------
+
+/**
+ * Safely reads a file and throws a descriptive error if it fails
+ * @param {string} filePath - Path to the file
+ * @returns {Promise<string>} File contents
+ */
+async function safeReadFile(filePath) {
+  try {
+    await access(filePath, fs.constants.R_OK);
+    return await readFile(filePath, 'utf8');
+  } catch (error) {
+    throw new Error(`Failed to read file "${filePath}": ${error.message}`);
+  }
 }
 
-// -------------------------------
-// Perplexity API Integration
-// -------------------------------
+/**
+ * Creates a timestamped backup path for a given file
+ * @param {string} originalPath - Original file path
+ * @returns {string} Backup file path with timestamp
+ */
+function createBackupPath(originalPath) {
+  const dir = path.dirname(originalPath);
+  const ext = path.extname(originalPath);
+  const name = path.basename(originalPath, ext);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  return path.join(dir, `${name}.${timestamp}.bak${ext}`);
+}
 
-async function callPerplexity({ testContent, logContent, fileName }) {
-  const prompt = `You are a test debugging expert. I have a failing Playwright test and its error log. Please analyze the error and provide a corrected version of the test file.
+/**
+ * Calls Perplexity API with the failed test and error log to generate a corrected test
+ * Uses mistral-7b-instruct model for code correction
+ * @param {string} testContent - The original test file content
+ * @param {string} errorLog - The error log content
+ * @returns {Promise<string>} Corrected test code
+ */
+async function callPerplexityAPI(testContent, errorLog) {
+  const prompt = `You are an expert Playwright/Jest test engineer. Below is a test that failed and the error log. Please analyze the error and provide a corrected version of the test.
 
-**Test File (${fileName}):**
-\`\`\`javascript
+--- Original Test ---
 ${testContent}
-\`\`\`
 
-**Error Log:**
-\`\`\`
-${logContent}
-\`\`\`
+--- Error Log ---
+${errorLog}
 
-**Requirements:**
-- Fix the specific issues mentioned in the error log
-- Keep the test structure and intent intact
-- Use proper Playwright syntax and best practices
-- Add proper waits and assertions as needed
-- Return ONLY the corrected JavaScript code, no explanations
+--- Instructions ---
+1. Fix the test based on the error log
+2. Maintain the original test structure and intent
+3. Use proper selectors and best practices
+4. Add comments explaining the fixes
+5. Return ONLY the corrected test code, no explanations
 
-Corrected test file:`;
+Corrected Test:`;
 
   try {
     const response = await axios.post(
       PERPLEXITY_API_URL,
       {
-        model: 'llama-3.1-sonar-small-128k-online',
+        model: 'mistral-7b-instruct',
         messages: [
-          {
-            role: 'system',
-            content: 'You are a Playwright test debugging expert. Analyze failing tests and provide corrected code without any markdown formatting or explanations.'
-          },
           {
             role: 'user',
             content: prompt
           }
         ],
-        temperature: 0.3,
-        max_tokens: 2000
+        temperature: 0.2,
+        max_tokens: 3000
       },
       {
         headers: {
@@ -150,19 +216,8 @@ Corrected test file:`;
       }
     );
 
-    if (!response.data || !response.data.choices || !response.data.choices[0]) {
-      throw new Error('Perplexity API returned invalid response');
-    }
-
-    let correctedCode = response.data.choices[0].message.content.trim();
-    
-    // Clean up the response by removing markdown code blocks if present
-    if (correctedCode.includes('```javascript') || correctedCode.includes('```js')) {
-      correctedCode = correctedCode.replace(/```(?:javascript|js)\n?/g, '').replace(/```\n?/g, '');
-    }
-    
-    return correctedCode.trim();
-    
+    const correctedCode = response.data.choices[0].message.content;
+    return extractCodeFromResponse(correctedCode);
   } catch (error) {
     if (error.response) {
       const status = error.response.status;
@@ -181,58 +236,31 @@ Corrected test file:`;
   }
 }
 
-// -------------------------------
-// Core Workflow
-// -------------------------------
+/**
+ * Extracts code from a response that may contain markdown code blocks or extra text
+ * @param {string} response - Raw API response
+ * @returns {string} Extracted code
+ */
+function extractCodeFromResponse(response) {
+  // Try to extract from markdown code blocks
+  const codeBlockRegex = /```(?:javascript|js|typescript|ts)?\n([\s\S]*?)```/g;
+  const matches = [];
+  let match;
 
-async function generateFix({ testPath, logPath, backup, dryRun }) {
-  await ensureReadable(testPath);
-  await ensureReadable(logPath);
-
-  const [testContent, logContent] = await Promise.all([
-    readFile(testPath, 'utf8'),
-    readFile(logPath, 'utf8'),
-  ]);
-
-  const fixedContent = await callPerplexity({
-    testContent,
-    logContent,
-    fileName: path.basename(testPath),
-  });
-
-  if (dryRun) {
-    console.log('\n--- Suggested corrected file (dry run) ---\n');
-    console.log(fixedContent);
-    console.log('\n--- End corrected file ---\n');
-    return { wrote: false };
+  while ((match = codeBlockRegex.exec(response)) !== null) {
+    matches.push(match[1]);
   }
 
-  if (backup) {
-    const b = await backupFile(testPath);
-    console.log(`Backup created at: ${b}`);
+  if (matches.length > 0) {
+    // Return the largest code block (likely the main code)
+    return matches.reduce((a, b) => a.length > b.length ? a : b).trim();
   }
 
-  await writeFile(testPath, fixedContent, 'utf8');
-  console.log(`Overwrote ${testPath} with corrected content.`);
-  return { wrote: true };
+  // If no code blocks, return trimmed response
+  return response.trim();
 }
 
 // -------------------------------
-// Entrypoint
+// Execute Main
 // -------------------------------
-
-(async function main() {
-  try {
-    const args = parseArgs(process.argv);
-    
-    if (args.help || !args.testPath || !args.logPath) {
-      printHelp();
-      process.exit(args.help ? 0 : 1);
-    }
-
-    await generateFix(args);
-  } catch (err) {
-    console.error('Error:', err.message || err);
-    process.exit(1);
-  }
-})();
+main();
