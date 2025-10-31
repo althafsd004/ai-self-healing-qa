@@ -34,6 +34,8 @@ const axios = require('axios');
 
 /**
  * Perplexity API Configuration
+ * API Endpoint: https://api.perplexity.ai/chat/completions
+ * Recommended Model: mistral-7b-instruct
  * Set the PERPLEXITY_API_KEY environment variable with your API key
  */
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || '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';
@@ -59,100 +61,107 @@ const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
 
 /**
  * Main function to orchestrate the test generation process
- * 1. Read the test description from input file
- * 2. Call Perplexity API to convert description to Playwright code
+ * 1. Read test input file
+ * 2. Generate Playwright code using Perplexity API
  * 3. Save the generated code to output file
  */
 async function generateTest() {
   try {
-    console.log('Starting test generation...');
-    
-    // Step 1: Read the test description from input file
-    const testDescription = readTestInput(INPUT_FILE);
-    console.log(`Read test description from: ${INPUT_FILE}`);
-    
-    // Step 2: Generate Playwright code using Perplexity API
-    console.log('Calling Perplexity API...');
-    const playwrightCode = await generatePlaywrightCode(testDescription);
-    
-    // Step 3: Save the generated code to the output file
-    saveTestOutput(OUTPUT_FILE, playwrightCode);
-    console.log(`Test file generated successfully: ${OUTPUT_FILE}`);
-    
+    console.log('\n========================================');
+    console.log('Test Generation Started');
+    console.log('========================================\n');
+
+    // Read test input file
+    const testInput = await readTestInput(INPUT_FILE);
+    console.log(`✓ Read test input from: ${INPUT_FILE}`);
+
+    // Generate Playwright code
+    const playwrightCode = await generatePlaywrightCode(testInput);
+    console.log('✓ Generated Playwright code using Perplexity API');
+
+    // Save to output file
+    await saveTestOutput(OUTPUT_FILE, playwrightCode);
+    console.log(`✓ Saved test to: ${OUTPUT_FILE}`);
+
+    console.log('\n========================================');
+    console.log('Test Generation Completed Successfully');
+    console.log('========================================\n');
   } catch (error) {
-    console.error('Error generating test:', error.message);
+    console.error('\n❌ Error generating test:');
+    console.error(error.message);
     process.exit(1);
   }
 }
 
 // ============================================================================
-// HELPER FUNCTIONS
+// CORE FUNCTIONS
 // ============================================================================
 
 /**
- * Read test description from the input file
- * @param {string} filePath - Path to the input file
- * @returns {string} - Content of the input file
+ * Reads the test input file
+ * @param {string} filePath - Path to the test input file
+ * @returns {Promise<string>} Test input content
  */
-function readTestInput(filePath) {
+async function readTestInput(filePath) {
   try {
-    return fs.readFileSync(filePath, 'utf8');
+    return fs.readFileSync(filePath, 'utf-8');
   } catch (error) {
-    throw new Error(`Failed to read input file: ${error.message}`);
+    throw new Error(`Failed to read test input file: ${error.message}`);
   }
 }
 
 /**
- * Save the generated Playwright code to the output file
- * @param {string} filePath - Path to the output file
+ * Saves the generated test code to output file
+ * @param {string} filePath - Path to save the test file
  * @param {string} code - Generated Playwright code
  */
-function saveTestOutput(filePath, code) {
+async function saveTestOutput(filePath, code) {
   try {
-    // Create directory if it doesn't exist
+    // Create output directory if it doesn't exist
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    
-    // Clean up the code by removing markdown code blocks if present
-    let cleanCode = code;
-    if (code.includes('```javascript') || code.includes('```js')) {
-      cleanCode = code.replace(/```(?:javascript|js)\n?/g, '').replace(/```\n?/g, '');
-    }
-    
-    fs.writeFileSync(filePath, cleanCode.trim());
+
+    fs.writeFileSync(filePath, code, 'utf-8');
   } catch (error) {
-    throw new Error(`Failed to write output file: ${error.message}`);
+    throw new Error(`Failed to save test output file: ${error.message}`);
   }
 }
 
 /**
- * Generate Playwright code using Perplexity API
- * @param {string} testDescription - Plain text description of the test
- * @returns {Promise<string>} - Generated Playwright code
+ * Generates Playwright test code using Perplexity API
+ * Uses mistral-7b-instruct model for code generation
+ * @param {string} testInput - Test description in plain text
+ * @returns {Promise<string>} Generated Playwright test code
  */
-async function generatePlaywrightCode(testDescription) {
+async function generatePlaywrightCode(testInput) {
+  const prompt = `You are a Playwright test automation expert. Convert the following test description into a complete Playwright test file.
+
+Requirements:
+- Use modern Playwright syntax with async/await
+- Include proper test structure with describe/test blocks
+- Add meaningful assertions
+- Use best practices for selectors
+- Include comments for clarity
+
+Test Description:
+${testInput}
+
+Provide ONLY the complete JavaScript test code, no explanations.`;
+
   try {
-    // Construct the prompt for Perplexity API
-    const prompt = `You are a Playwright test code generator. Generate a complete, working Playwright test file based on this description:\n\n${testDescription}\n\nRequirements:\n- Use modern Playwright syntax\n- Include proper imports and test structure\n- Add meaningful test descriptions\n- Use best practices for selectors\n- Include appropriate waits and assertions\n- Return ONLY the JavaScript code, no explanations\n\nGenerate the complete test file:`;
-    
-    // Make API request to Perplexity
     const response = await axios.post(
       PERPLEXITY_API_URL,
       {
-        model: 'llama-3.1-sonar-small-128k-online',
+        model: 'mistral-7b-instruct',
         messages: [
-          {
-            role: 'system',
-            content: 'You are a Playwright test code generator. Generate clean, working code without any markdown formatting or explanations.'
-          },
           {
             role: 'user',
             content: prompt
           }
         ],
-        temperature: 0.3,
+        temperature: 0.2,
         max_tokens: 2000
       },
       {
@@ -162,21 +171,11 @@ async function generatePlaywrightCode(testDescription) {
         }
       }
     );
+
+    const generatedCode = response.data.choices[0].message.content;
     
-    // Extract the generated code from the API response
-    if (!response.data || !response.data.choices || !response.data.choices[0]) {
-      throw new Error('Perplexity API returned invalid response');
-    }
-    
-    const generatedCode = response.data.choices[0].message.content.trim();
-    
-    // Validate that we received code
-    if (!generatedCode) {
-      throw new Error('Perplexity API returned empty response');
-    }
-    
-    return generatedCode;
-    
+    // Extract code from markdown code blocks if present
+    return extractCodeFromMarkdown(generatedCode);
   } catch (error) {
     // Provide detailed error messages for common API issues
     if (error.response) {
@@ -194,6 +193,141 @@ async function generatePlaywrightCode(testDescription) {
       throw new Error(`Perplexity API error: ${error.message}`);
     }
   }
+}
+
+/**
+ * Extracts code from markdown code blocks
+ * @param {string} text - Text that may contain markdown code blocks
+ * @returns {string} Extracted code
+ */
+function extractCodeFromMarkdown(text) {
+  // Match code blocks with optional language specifier
+  const codeBlockRegex = /```(?:javascript|js)?\n([\s\S]*?)```/g;
+  const matches = [];
+  let match;
+
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    matches.push(match[1]);
+  }
+
+  if (matches.length > 0) {
+    // Return the largest code block (likely the main code)
+    return matches.reduce((a, b) => a.length > b.length ? a : b).trim();
+  }
+
+  // If no code blocks found, return the text as-is
+  return text.trim();
+}
+
+/**
+ * Cleans up the generated code by removing explanatory text
+ * @param {string} code - Raw generated code
+ * @returns {string} Cleaned code
+ */
+function cleanGeneratedCode(code) {
+  // Remove common prefixes/suffixes that might be added by the model
+  let cleaned = code.trim();
+  
+  // Remove "Here is" type explanations at the start
+  cleaned = cleaned.replace(/^(Here is|Here's).*?:\n/i, '');
+  
+  // Remove explanations after the code
+  const lastClosingBrace = cleaned.lastIndexOf('}');
+  if (lastClosingBrace !== -1) {
+    // Keep everything up to and including the last closing brace
+    cleaned = cleaned.substring(0, lastClosingBrace + 1);
+  }
+  
+  return cleaned.trim();
+}
+
+/**
+ * Extracts JavaScript code from a response that may contain markdown or explanatory text
+ * @param {string} response - Raw response from API
+ * @returns {string} Extracted JavaScript code
+ */
+function extractJavaScriptCode(response) {
+  // First try to extract from markdown code blocks
+  const codeBlockMatch = response.match(/```(?:javascript|js)?\n([\s\S]*?)```/);
+  if (codeBlockMatch) {
+    return codeBlockMatch[1].trim();
+  }
+  
+  // If no code block, look for code starting with common patterns
+  const codePatterns = [
+    /const.*require.*playwright/i,
+    /import.*from.*playwright/i,
+    /test\(/,
+    /describe\(/
+  ];
+  
+  for (const pattern of codePatterns) {
+    const match = response.match(pattern);
+    if (match) {
+      // Extract from this point onwards
+      const startIndex = match.index;
+      const generatedCode = response.substring(startIndex);
+      return cleanGeneratedCode(generatedCode);
+    }
+  }
+  
+  // If nothing worked, return cleaned response
+  return cleanGeneratedCode(response);
+}
+
+/**
+ * Validates that the generated code is valid Playwright test code
+ * @param {string} code - Generated code to validate
+ * @returns {boolean} True if valid
+ * @throws {Error} If code is invalid
+ */
+function validateGeneratedCode(code) {
+  // Check for required Playwright imports or requires
+  const hasPlaywrightImport = /(?:import|require).*playwright/.test(code);
+  
+  // Check for test structure
+  const hasTestStructure = /(?:test|describe)\(/.test(code);
+  
+  if (!hasPlaywrightImport) {
+    throw new Error('Generated code does not include Playwright import/require');
+  }
+  
+  if (!hasTestStructure) {
+    throw new Error('Generated code does not include test structure (test/describe)');
+  }
+  
+  return true;
+}
+
+/**
+ * Generates Playwright code with validation and retry logic
+ * @param {string} testInput - Test description
+ * @param {number} maxRetries - Maximum number of retry attempts
+ * @returns {Promise<string>} Validated Playwright code
+ */
+async function generatePlaywrightCodeWithRetry(testInput, maxRetries = 3) {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`Attempt ${attempt}/${maxRetries}...`);
+      
+      const generatedCode = await generatePlaywrightCode(testInput);
+      validateGeneratedCode(generatedCode);
+      
+      return generatedCode;
+    } catch (error) {
+      lastError = error;
+      console.error(`Attempt ${attempt} failed: ${error.message}`);
+      
+      if (attempt < maxRetries) {
+        console.log('Retrying...');
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
+      }
+    }
+  }
+  
+  throw new Error(`Failed to generate valid code after ${maxRetries} attempts: ${lastError.message}`);
 }
 
 // ============================================================================
